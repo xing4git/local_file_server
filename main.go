@@ -3,36 +3,47 @@ package main
 import (
 	"fmt"
 	"os"
-	"net/http"
 	"strings"
 	"errors"
-	"strconv"
-	"time"
-	"io"
+	"net/http"
 	goprop "github.com/xing4git/goprop"
-)
-
-const (
-	listenAddr string = ":9090"
+	"html/template"
 )
 
 var (
-	uploadContent string = "<!doctype html>\n" + "<html>\n" + "<head>\n" + "<meta charset='utf-8'>\n" + "<title>upload</title>\n" + "</head>\n" + "<body>\n" + "<form method='POST' action='/upload' enctype='multipart/form-data'>\n" + "choose file to upload: <input name='file' id='file' type='file' /><br />\n" + "<input type='submit' value='upload' />\n" + "</form>\n" + "</body>\n" + "</html>\n"
+	templateCache map[string]*template.Template
+	port          string
 	basedir       string
 	uploaddir     string
+	imgDirpath    string = "/images/dir.png"
+	imgFilepath   string = "/images/file.png"
 )
+
+func init() {
+	templateCache = make(map[string]*template.Template)
+
+	for _, subpath := range []string{"upload", "dir"} {
+		t := template.Must(template.ParseFiles("html/" + subpath + ".html"))
+		templateCache[subpath] = t
+	}
+}
 
 func main() {
 	readConf()
 
-	http.HandleFunc("/local", safeHanlder(localFileHandler))
-	http.HandleFunc("/upload", safeHanlder(uploadHandler))
-	err := http.ListenAndServe(listenAddr, nil)
+	http.HandleFunc("/local/", safeHanlder(localFileHandler))
+	http.HandleFunc("/upload/", safeHanlder(uploadHandler))
+	http.HandleFunc("/images/", safeHanlder(imagesHandler))
+	http.HandleFunc("/download/", safeHanlder(downloadHandler))
+	err := http.ListenAndServe(":"+port, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 	}
 }
 
+/**
+ * read basedir, uploaddir, port from conf file.
+ */
 func readConf() {
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: local_file_server [conf path]")
@@ -43,6 +54,8 @@ func readConf() {
 	kv, err := goprop.Load(confpath)
 	checkErr(err)
 	fmt.Println(kv)
+
+	// check contains
 	var contains bool = false
 	if basedir, contains = kv["basedir"]; !contains {
 		checkErr(errors.New("There is no basedir configuration in " + confpath))
@@ -50,90 +63,49 @@ func readConf() {
 	if uploaddir, contains = kv["uploaddir"]; !contains {
 		checkErr(errors.New("There is no uploaddir configuration in " + confpath))
 	}
+	if port, contains = kv["port"]; !contains {
+		checkErr(errors.New("There is no port configuration in " + confpath))
+	}
 
 	checkDir(basedir)
 	checkDir(uploaddir)
-	if !strings.HasSuffix(basedir, "/") {
-		basedir = basedir + "/"
+
+	// if the last char is '/', delete
+	if strings.HasSuffix(basedir, "/") {
+		basedir = basedir[:len(basedir)-1]
 	}
-	if !strings.HasSuffix(uploaddir, "/") {
-		uploaddir = uploaddir + "/"
+	if strings.HasSuffix(uploaddir, "/") {
+		uploaddir = uploaddir[:len(uploaddir)-1]
 	}
 
-	fmt.Println("visit localhost" + listenAddr + "/upload to upload file.")
-	fmt.Println("visit localhost" + listenAddr + "/local?path=[filepath] to visit local file")
+	fmt.Printf("basedir = %s, uploaddir = %s, port = %s\n", basedir, uploaddir, port)
 }
 
+/**
+ * check basedir or uploaddir whether is a dir. 
+ * if uploaddir is not exist, create it.
+ */
 func checkDir(dirpath string) {
 	fileinfo, err := os.Stat(dirpath)
+	if dirpath == uploaddir && os.IsNotExist(err) {
+		err = os.MkdirAll(uploaddir, 0774)
+		if err == nil {
+			fileinfo, err = os.Stat(dirpath)
+		}
+	}
+
 	checkErr(err)
 	if !fileinfo.IsDir() {
 		checkErr(errors.New(dirpath + " is not a dir"))
 	}
 }
 
+/**
+ * if error happens before http server starting, then exit
+ */
 func checkErr(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(2)
-	}
-}
-
-func localFileHandler(w http.ResponseWriter, r *http.Request) {
-	checkServerError(r.ParseForm())
-	filename := basedir + r.FormValue("path")
-	fileinfo, err := os.Stat(filename)
-	checkServerError(err)
-	if fileinfo.IsDir() {
-		checkServerError(errors.New(filename + " is a dir!"))
-	}
-
-	// download http header
-	w.Header().Set("Content-type", "application/octet-stream")
-	w.Header().Set("Content-disposition", "attachment; filename="+fileinfo.Name())
-	w.Header().Set("Content-Length", strconv.Itoa(int(fileinfo.Size())))
-	http.ServeFile(w, r, filename)
-	fmt.Fprintln(os.Stdout, "write file to client: "+filename)
-}
-
-func uploadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "GET" {
-		w.Header().Set("Content-type", "text/html;charset=utf-8")
-		io.Copy(w, strings.NewReader(uploadContent))
-		fmt.Fprintln(os.Stdout, "write upload content to client")
-		return
-	} else if r.Method == "POST" {
-		f, h, err := r.FormFile("file")
-		checkServerError(err)
-		defer f.Close()
-		destFile := uploaddir + strconv.Itoa(time.Now().Nanosecond()) + "_" + h.Filename
-		t, err := os.Create(destFile)
-		checkServerError(err)
-		defer t.Close()
-		_, err = io.Copy(t, f)
-		checkServerError(err)
-		fmt.Fprintln(w, "upload success...")
-		fmt.Fprintln(os.Stdout, "write file to "+destFile)
-	}
-}
-
-func checkServerError(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-/**
- * make an http.HandleFunc be an safe http.HandleFunc
- */
-func safeHanlder(httpHanlder http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if err, ok := recover().(error); ok {
-				fmt.Fprintln(os.Stderr, err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-			}
-		}()
-		httpHanlder(w, r)
 	}
 }
