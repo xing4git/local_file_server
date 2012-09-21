@@ -1,0 +1,12 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<title>{{$.title}}</title>
+	</head>
+	<body>
+		{{range $.files}}
+			<img src="{{.Imgsrc}}"><a href="/local/{{.Filepath|urlquery}}">{{.Filename|html}}</a>&nbsp;&nbsp;&nbsp;&nbsp;{{if .Download}}<a href="/download/{{.Filepath|urlquery}}">下载</a>{{end}}<br/>
+		{{end}}
+	</body>
+</html>
