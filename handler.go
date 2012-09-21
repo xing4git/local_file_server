@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"path"
 )
 
 // used in html template file: dir.html 
@@ -48,6 +49,8 @@ func localFileHandler(w http.ResponseWriter, r *http.Request) {
 		checkServerError(err)
 
 		files := make([]ItemFile, 0, len(fis))
+		parent := path.Dir(subpath)
+		files = append(files, ItemFile{Imgsrc: imgDirpath, Filepath: parent, Filename: "..", Download: false})
 		for _, fi := range fis {
 			// exclude hidden file or dir
 			if strings.HasPrefix(fi.Name(), ".") {
